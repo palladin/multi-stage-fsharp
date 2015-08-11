@@ -76,7 +76,7 @@ let ext env x v = fun y -> if x = y then v else env y
 // val eval1 : exp -> (string -> int) -> (string -> int -> int) -> int 
 let rec eval1 e env fenv =
     match e with
-    Int i -> i
+    | Int i -> i
     | Var s -> env s
     | App (s, e2) -> (fenv s) (eval1 e2 env fenv)
     | Add (e1, e2) -> (eval1 e1 env fenv) + (eval1 e2 env fenv)
@@ -106,15 +106,15 @@ let rec eval2 e env fenv =
     | Var s -> env s
     | App (s, e2) -> <@ (% fenv s ) (% eval2 e2 env fenv ) @>
     | Add (e1, e2) -> <@ (% eval2 e1 env fenv ) + (% eval2 e2 env fenv ) @>
-    | Sub (e1, e2)-> <@ (% eval2 e1 env fenv ) - (% eval2 e2 env fenv ) @>
-    | Mul (e1, e2)-> <@ (% eval2 e1 env fenv ) * (% eval2 e2 env fenv ) @>
-    | Div (e1, e2)-> <@ (% eval2 e1 env fenv ) / (% eval2 e2 env fenv ) @>
+    | Sub (e1, e2) -> <@ (% eval2 e1 env fenv ) - (% eval2 e2 env fenv ) @>
+    | Mul (e1, e2) -> <@ (% eval2 e1 env fenv ) * (% eval2 e2 env fenv ) @>
+    | Div (e1, e2) -> <@ (% eval2 e1 env fenv ) / (% eval2 e2 env fenv ) @>
     | Ifz (e1, e2, e3) -> <@ if (% eval2 e1 env fenv ) = 0
-                           then (% eval2 e2 env fenv )
-                           else (% eval2 e3 env fenv ) @>
+                             then (% eval2 e2 env fenv )
+                             else (% eval2 e3 env fenv ) @>
 
 // val peval2 : prog -> (string -> Expr<int>) -> (string -> Expr<int -> int>) -> Expr<int> 
-let rec peval2 p env fenv=
+let rec peval2 p env fenv =
     match p with
     | Program ([], e) -> eval2 e env fenv
     | Program (Declaration (s1, s2, e1) :: tl, e) ->
@@ -124,3 +124,206 @@ let rec peval2 p env fenv=
 let fact10 = peval2 fact10Program env0 fenv0
 
 QuotationCompiler.Eval fact10 // 3628800
+
+// Interpreter with Error Handling
+
+// val eval3 : exp -> (string -> int) -> (string -> int -> int option) -> int option 
+let rec eval3 e env fenv =
+    match e with
+    | Int i -> Some i
+    | Var s -> Some (env s)
+    | App (s, e2) -> match (eval3 e2 env fenv) with
+                     | Some x -> (fenv s) x
+                     | None -> None
+    | Add (e1, e2) -> match (eval3 e1 env fenv), (eval3 e2 env fenv) with
+                      | Some x, Some y -> Some (x + y)
+                      | _ -> None
+    | Sub (e1, e2) -> match (eval3 e1 env fenv), (eval3 e2 env fenv) with
+                      | Some x, Some y -> Some (x - y)
+                      | _ -> None
+    | Mul (e1, e2) -> match (eval3 e1 env fenv), (eval3 e2 env fenv) with
+                      | Some x, Some y -> Some (x * y)
+                      | _ -> None
+    | Div (e1, e2) -> match (eval3 e1 env fenv), (eval3 e2 env fenv) with
+                      | Some x, Some y -> 
+                        if y = 0 then None else Some (x / y)
+                      | _ -> None
+    | Ifz (e1, e2, e3) -> match (eval3 e1 env fenv)  with 
+                          | Some x -> if x = 0 then (eval3 e2 env fenv) else (eval3 e3 env fenv)
+                          | None -> None
+
+
+// val peval3 : prog -> (string -> int) -> (string -> int -> int option) -> int option 
+let rec peval3 p env fenv =
+    match p with
+    | Program ([], e) -> eval3 e env fenv
+    | Program (Declaration (s1, s2, e1) :: tl, e) ->
+        let rec f x = eval3 e1 (ext env s2 x) (ext fenv s1 f)
+        peval3 (Program (tl, e)) env (ext fenv s1 f)
+
+
+let fact20Div2Program = 
+    Program ([Declaration
+                ("fact","x", Ifz (Var "x", Int 1,
+                                    Mul (Var"x", (App ("fact", Sub (Var "x", Int 1))))))],
+                App ("fact", Div (Int 20, Int 2)))
+
+peval3 fact20Div2Program env0 fenv0 // Some 3628800
+
+// Staged Interpreter with Error Handling
+
+// val eval4 : exp -> (string -> Expr<int>) -> (string -> Expr<int -> int option>) -> Expr<int option> 
+let rec eval4 e env fenv =
+    match e with
+    | Int i -> <@ Some i @>
+    | Var s -> <@ Some (% env s ) @>
+    | App (s, e2) -> <@ match (% eval4 e2 env fenv ) with
+                        | Some x -> (% fenv s ) x
+                        | None -> None @>
+    | Add (e1, e2) -> <@ match (% eval4 e1 env fenv ), (% eval4 e2 env fenv ) with
+                         | Some x, Some y -> Some (x + y)
+                         | _ -> None @>
+    | Sub (e1, e2) -> <@ match (% eval4 e1 env fenv ), (% eval4 e2 env fenv ) with
+                         | Some x, Some y -> Some (x - y)
+                         | _ -> None @>
+    | Mul (e1, e2) -> <@ match (% eval4 e1 env fenv ), (% eval4 e2 env fenv ) with
+                         | Some x, Some y -> Some (x * y)
+                         | _ -> None @>
+    | Div (e1, e2) -> <@ match (% eval4 e1 env fenv ), (% eval4 e2 env fenv ) with
+                         | Some x, Some y -> 
+                            if y = 0 then None else Some (x / y)
+                         | _ -> None @>
+    | Ifz (e1, e2, e3) -> <@ match (% eval4 e1 env fenv )  with 
+                             | Some x -> if x = 0 then (% eval4 e2 env fenv ) else (% eval4 e3 env fenv )
+                             | None -> None @>
+
+
+// val peval4 : prog -> (string -> int) -> (string -> int -> int option) -> int option 
+let rec peval4 p env fenv =
+    match p with
+    | Program ([], e) -> eval4 e env fenv
+    | Program (Declaration (s1, s2, e1) :: tl, e) ->
+        <@  let rec f x = (% lambda2 (fun f x -> eval4 e1 (ext env s2 x) (ext fenv s1 f))) f x
+            in (% lambda (fun f -> peval4 (Program(tl, e)) env (ext fenv s1 f)) ) f @>
+
+
+let fact20Div2 = peval4 fact20Div2Program env0 fenv0 
+QuotationCompiler.Eval fact20Div2 // Some 3628800
+
+// CPS Interpreter with Error Handling
+
+// val eval5 : exp -> (string -> int) -> (string -> int -> int) -> (int option -> ’a) -> ’a 
+let rec eval5 e env fenv k =
+    match e with
+    | Int i -> k (Some i)
+    | Var s -> k (Some (env s))
+    | App (s, e2) -> eval5 e2 env fenv
+                      (fun r -> match r with
+                                | Some x -> k (Some ((fenv s) x))
+                                | None -> k None)
+    | Add (e1, e2) -> eval5 e1 env fenv
+                       (fun r ->
+                         eval5 e2 env fenv
+                           (fun s -> match (r,s) with
+                                     | (Some x, Some y) -> k (Some (x + y))
+                                     | _ -> k None))
+    | Sub (e1, e2) -> eval5 e1 env fenv
+                       (fun r ->
+                         eval5 e2 env fenv
+                           (fun s -> match (r,s) with
+                                     | (Some x, Some y) -> k (Some (x - y))
+                                     | _ -> k None)) 
+    | Mul (e1, e2) -> eval5 e1 env fenv
+                       (fun r ->
+                         eval5 e2 env fenv
+                           (fun s -> match (r,s) with
+                                     | (Some x, Some y) -> k (Some (x * y))
+                                     | _ -> k None)) 
+    | Div (e1, e2) -> eval5 e1 env fenv
+                       (fun r ->
+                         eval5 e2 env fenv (fun s -> match (r,s) with
+                                                     | (Some x, Some y) ->
+                                                            if y=0 then k None
+                                                            else k (Some (x / y))
+                                                     | _ -> k None))
+    | Ifz (e1, e2, e3) -> eval5 e1 env fenv
+                            (fun r -> match r with
+                                      | Some x -> 
+                                        if x = 0 then eval5 e2 env fenv k
+                                        else eval5 e3 env fenv k
+                                      | None   -> k None)
+
+// val pevalK5 : prog -> (string -> int) -> (string -> int -> int) -> (int option -> int) -> int 
+let rec pevalK5 p env fenv k =
+    match p with
+    | Program ([], e) -> eval5 e env fenv k
+    | Program (Declaration (s1, s2, e1) :: tl, e) ->
+        let rec f x = eval5 e1 (ext env s2 x) (ext fenv s1 f) k
+          in pevalK5 (Program(tl, e)) env (ext fenv s1 f) k
+
+(* peval5 : prog -> (string -> int) -> (string -> int -> int) -> int *)
+let peval5 p env fenv =
+     pevalK5 p env fenv (function Some x -> x
+                                | None -> raise <| new DivideByZeroException())
+
+peval5 fact20Div2Program env0 fenv0 // 3628800
+
+// Staged CPS Interpreter with Error Handling
+
+// val eval6 : exp -> (string -> Expr<int>) -> (string -> Expr<int -> int>) -> (Expr<int> option -> Expr<’a>) -> Expr<’a> 
+let rec eval6 e env fenv k =
+    match e with
+    | Int i -> k (Some <@ i @>)
+    | Var s -> k (Some (env s))
+    | App (s, e2) -> eval6 e2 env fenv
+                      (fun r -> match r with
+                                | Some x -> k (Some <@ (% fenv s)  %x @>)
+                                | None -> k None)
+    | Add (e1, e2) -> eval6 e1 env fenv
+                       (fun r ->
+                         eval6 e2 env fenv
+                           (fun s -> match (r, s) with
+                                     | (Some x, Some y) -> k (Some <@ %x + %y @>)
+                                     | _ -> k None))
+    | Sub (e1, e2) -> eval6 e1 env fenv
+                       (fun r ->
+                         eval6 e2 env fenv
+                           (fun s -> match (r, s) with
+                                     | (Some x, Some y) -> k (Some <@ %x - %y @>)
+                                     | _ -> k None)) 
+    | Mul (e1, e2) -> eval6 e1 env fenv
+                       (fun r ->
+                         eval6 e2 env fenv
+                           (fun s -> match (r, s) with
+                                     | (Some x, Some y) -> k (Some <@ %x * %y @>)
+                                     | _ -> k None)) 
+    | Div (e1, e2) -> eval6 e1 env fenv
+                       (fun r ->
+                         eval6 e2 env fenv (fun s -> match (r, s) with
+                                                     | (Some x, Some y) ->
+                                                            <@ if %y = 0 then (% k None )
+                                                               else (% k (Some <@ %x / %y @>) ) @>
+                                                     | _ -> k None))
+    | Ifz (e1, e2, e3) -> eval6 e1 env fenv
+                            (fun r -> match r with
+                                      | Some x -> 
+                                        <@ if %x = 0 then (% eval6 e2 env fenv k )
+                                           else (% eval6 e3 env fenv k ) @>
+                                      | None   -> k None)
+
+// val pevalK6 : prog -> (string -> Expr<int>) -> (string -> Expr<int -> int>) -> (Expr<int> option -> Expr<int>) -> Expr<int>
+let rec pevalK6 p env fenv k =
+    match p with
+    | Program ([], e) -> eval6 e env fenv k
+    | Program (Declaration (s1, s2, e1) :: tl, e) ->
+        <@  let rec f x = (% lambda2 (fun f x -> eval6 e1 (ext env s2 x) (ext fenv s1 f) k)) f x
+            in (% lambda (fun f -> pevalK6 (Program(tl, e)) env (ext fenv s1 f) k) ) f @>
+
+// val peval6 : prog -> (string -> Expr<int>) -> (string -> Expr<int -> int>) -> Expr<int>
+let peval6 p env fenv =
+     pevalK6 p env fenv (function Some x -> x
+                                | None -> <@ raise <| new DivideByZeroException() @>)
+
+let fact20Div2' = peval6 fact20Div2Program env0 fenv0 
+QuotationCompiler.Eval fact20Div2' // 3628800
+
