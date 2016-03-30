@@ -8,6 +8,8 @@ open QuotationCompiler
 open System
 open Microsoft.FSharp.Quotations
 
+
+
 // helper functions
 
 // <@ fun x -> (% <@ x @> ) @> ~ lambda (fun x -> x)
@@ -21,6 +23,15 @@ let lambda2 (f : Expr<'T> -> Expr<'S> -> Expr<'R>) : Expr<'T -> 'S -> 'R> =
     let var' = new Var("__temp'__", typeof<'S>)
     Expr.Cast<_>(Expr.Lambda(var, Expr.Lambda(var',  f (Expr.Cast<_>(Expr.Var var)) (Expr.Cast<_>(Expr.Var var')))))
 
+let duration f name = 
+    let timer = new System.Diagnostics.Stopwatch()
+    timer.Start()
+    let returnValue = f()
+    for i = 1 to 1000000 do
+        let returnValue = f()
+        ()
+    printfn "Elapsed msec for %s: %i" name timer.ElapsedMilliseconds
+    returnValue
 
 // A Staged Program = A Conventional Program + Staging Annotations
 
@@ -45,9 +56,15 @@ let power2 = QuotationCompiler.Eval <| lambda (fun x -> power' 2 x)
 let power2' = QuotationCompiler.Eval <| 
                 <@ fun x -> (% lambda (fun x -> power' 2 x) ) x @>
 
-power2 10 // 100
-power2' 10 // 100
+let rec factorial n =
+    match n with
+    | 0 | 1 -> 1
+    | _ -> n * factorial(n-1)
 
+duration (fun() -> power2 10) "power2"// 100
+duration (fun() -> power2' 10) "power2'"// 100
+
+duration (fun () -> factorial 10) "native factorial 10"
 
 // A staged interpreter is a translator
 
@@ -95,9 +112,7 @@ let rec peval1 p env fenv =
         let rec f x = eval1 e1 (ext env s2 x) (ext fenv s1 f)
         peval1 (Program (tl, e)) env (ext fenv s1 f)
 
-peval1 fact10Program env0 fenv0 // 3628800
-
-
+duration (fun() -> peval1 fact10Program env0 fenv0) "interpreted fact10Program"// 3628800
 
 // val eval2 : exp -> (string -> Expr<int>) -> (string -> Expr<int -> int>) -> Expr<int> 
 let rec eval2 e env fenv =
@@ -123,7 +138,9 @@ let rec peval2 p env fenv =
 
 let fact10 = peval2 fact10Program env0 fenv0
 
-QuotationCompiler.Eval fact10 // 3628800
+let compiledFact10 = QuotationCompiler.ToFunc fact10
+
+duration (fun() -> compiledFact10 ()) "compiled fact10Program"// 3628800
 
 // Interpreter with Error Handling
 
@@ -167,8 +184,9 @@ let fact20Div2Program =
                 ("fact","x", Ifz (Var "x", Int 1,
                                     Mul (Var"x", (App ("fact", Sub (Var "x", Int 1))))))],
                 App ("fact", Div (Int 20, Int 2)))
+                
 
-peval3 fact20Div2Program env0 fenv0 // Some 3628800
+duration (fun() -> peval3 fact20Div2Program env0 fenv0) "interpreted fact20Div2Program w/error handling"
 
 // Staged Interpreter with Error Handling
 
@@ -206,9 +224,10 @@ let rec peval4 p env fenv =
         <@  let rec f x = (% lambda2 (fun f x -> eval4 e1 (ext env s2 x) (ext fenv s1 f))) f x
             in (% lambda (fun f -> peval4 (Program(tl, e)) env (ext fenv s1 f)) ) f @>
 
+            
+let Qfact20Div2 = QuotationCompiler.ToFunc (peval4 fact20Div2Program env0 fenv0)
 
-let fact20Div2 = peval4 fact20Div2Program env0 fenv0 
-QuotationCompiler.Eval fact20Div2 // Some 3628800
+duration (fun() -> Qfact20Div2 ()) "compiled fact20Div2Program with error handling"
 
 // CPS Interpreter with Error Handling
 
@@ -266,7 +285,7 @@ let peval5 p env fenv =
      pevalK5 p env fenv (function Some x -> x
                                 | None -> raise <| new DivideByZeroException())
 
-peval5 fact20Div2Program env0 fenv0 // 3628800
+duration (fun() -> peval5 fact20Div2Program env0 fenv0 ) "interpreted CPS fact20Div2Program with error handling" // 3628800
 
 // Staged CPS Interpreter with Error Handling
 
@@ -325,5 +344,7 @@ let peval6 p env fenv =
                                 | None -> <@ raise <| new DivideByZeroException() @>)
 
 let fact20Div2' = peval6 fact20Div2Program env0 fenv0 
-QuotationCompiler.Eval fact20Div2' // 3628800
+let Qfact20Div2' = QuotationCompiler.ToFunc (peval6 fact20Div2Program env0 fenv0) 
+
+duration (fun() -> Qfact20Div2' ()) "compiled CPS fact20Div2Program with error handling"// 3628800
 
